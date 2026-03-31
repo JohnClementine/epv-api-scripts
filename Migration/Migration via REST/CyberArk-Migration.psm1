@@ -1,14 +1,12 @@
-[CmdletBinding()]
+# Global URLS
+# -----------
+#region Global Variables
 
 # --- SSL Bypass: skip certificate checks on every web request in this module ---
 $PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
 $PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-
-# Global URLS
-# -----------
-#region Global Variables
 $URL_PVWAAPI = $global:PVWAURL + "/api"
 $URL_Authentication = $URL_PVWAAPI + "/auth"
 $URL_Logon = $URL_Authentication + "/$global:AuthType/Logon"

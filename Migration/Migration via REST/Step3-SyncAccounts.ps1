@@ -2,6 +2,9 @@
 # Run this from the "Migration via REST" directory
 # Requires: ExportOfAccounts.csv from Step 1
 
+# Force .NET to use WinHttpHandler (trusts Windows cert store like your browser)
+$env:DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER = '0'
+
 # --- Config ---
 $SourcePVWAURL  = "https://prdcapw1-esaw2a.uprising.t-mobile.com/PasswordVault"
 $SourceAuthType = "ldap"

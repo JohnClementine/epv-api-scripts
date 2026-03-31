@@ -1,6 +1,9 @@
 # Step 1: Export accounts (and safe info) from the SOURCE (old) environment
 # Run this from the "Migration via REST" directory
 
+# Force .NET to use WinHttpHandler (trusts Windows cert store like your browser)
+$env:DOTNET_SYSTEM_NET_HTTP_USESOCKETSHTTPHANDLER = '0'
+
 # --- Config ---
 $SourcePVWAURL  = "https://prdcapw1-esaw2a.uprising.t-mobile.com/PasswordVault"
 $SourceAuthType = "ldap"
