@@ -2,11 +2,14 @@
 # Run this from the "Migration via REST" directory
 # Requires: ExportOfAccounts.csv from Step 1
 
-# --- SSL Bypass (PowerShell 7) ---
-$PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck'] = $true
-$PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck'] = $true
+# --- SSL Bypass (PowerShell 7 - GLOBAL scope so it reaches inside modules) ---
+$global:PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+$global:PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
+# Suppress the "It is not Recommended to disable SSL" Inquire prompt inside the module
+$global:WarningPreference = 'SilentlyContinue'
 
 # --- Config ---
 $SourcePVWAURL  = "https://prdcapw1-esaw2a.uprising.t-mobile.com/PasswordVault"
