@@ -3,9 +3,6 @@
 # Requires: ExportOfAccounts.csv from Step 1
 
 # --- SSL Bypass (PowerShell 7) ---
-# Global scope so it reaches inside module function calls
-$global:PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
-$global:PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -20,6 +17,16 @@ $CPMOverride    = "PasswordManager"
 
 # --- Go ---
 Import-Module '.\Migrate.psm1' -Force
+
+# Inject -SkipCertificateCheck into the MODULE's session state.
+& (Get-Module 'Migrate') {
+    $PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+    $PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
+}
+& (Get-Module 'CyberArk-Migration') {
+    $PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+    $PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
+}
 
 Write-Host "Loading accounts from CSV..." -ForegroundColor Cyan
 Import-Accounts -importCSV ".\ExportOfAccounts.csv"

@@ -2,9 +2,6 @@
 # Run this from the "Migration via REST" directory
 
 # --- SSL Bypass (PowerShell 7) ---
-# Global scope so it reaches inside module function calls
-$global:PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
-$global:PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
 
@@ -15,11 +12,19 @@ $SourceAuthType = "ldap"
 # --- Go ---
 Import-Module '.\Migrate.psm1' -Force
 
+# Inject -SkipCertificateCheck into the MODULE's session state.
+# $global:PSDefaultParameterValues does NOT reach inside modules - they have
+# their own isolated scope. This reaches into each module and sets it there.
+& (Get-Module 'Migrate') {
+    $PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+    $PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
+}
+& (Get-Module 'CyberArk-Migration') {
+    $PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+    $PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
+}
+
 Write-Host "Connecting to SOURCE..." -ForegroundColor Cyan
-# NOTE: Do NOT pass -DisableSSLVerify here. The module's SSL bypass has a
-# -WarningAction Inquire prompt that crashes portable pwsh. We already
-# disabled SSL globally above, so the module's Invoke-WebRequest and
-# Invoke-RestMethod calls will pick up -SkipCertificateCheck automatically.
 New-SourceSession -srcPVWAURL $SourcePVWAURL -srcAuthType $SourceAuthType
 
 Write-Host "Exporting accounts to ExportOfAccounts.csv..." -ForegroundColor Cyan
