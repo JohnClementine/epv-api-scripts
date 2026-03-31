@@ -1,5 +1,11 @@
 [CmdletBinding()]
 
+# --- SSL Bypass: skip certificate checks on every web request in this module ---
+$PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
+$PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
+[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
+
 # Global URLS
 # -----------
 #region Global Variables
