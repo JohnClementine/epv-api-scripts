@@ -2,14 +2,12 @@
 # Run this from the "Migration via REST" directory
 # Requires: ExportOfAccounts.csv from Step 1
 
-# --- SSL Bypass (PowerShell 7 - GLOBAL scope so it reaches inside modules) ---
+# --- SSL Bypass (PowerShell 7) ---
+# Global scope so it reaches inside module function calls
 $global:PSDefaultParameterValues['Invoke-WebRequest:SkipCertificateCheck']  = $true
 $global:PSDefaultParameterValues['Invoke-RestMethod:SkipCertificateCheck']  = $true
 [System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12
-
-# Suppress the "It is not Recommended to disable SSL" Inquire prompt inside the module
-$global:WarningPreference = 'SilentlyContinue'
 
 # --- Config ---
 $SourcePVWAURL  = "https://prdcapw1-esaw2a.uprising.t-mobile.com/PasswordVault"
@@ -25,10 +23,10 @@ Write-Host "Loading accounts from CSV..." -ForegroundColor Cyan
 Import-Accounts -importCSV ".\ExportOfAccounts.csv"
 
 Write-Host "Connecting to SOURCE..." -ForegroundColor Cyan
-New-SourceSession -srcPVWAURL $SourcePVWAURL -srcAuthType $SourceAuthType -DisableSSLVerify
+New-SourceSession -srcPVWAURL $SourcePVWAURL -srcAuthType $SourceAuthType
 
 Write-Host "Connecting to DESTINATION..." -ForegroundColor Cyan
-New-DestinationSession -dstPVWAURL $DestPVWAURL -dstAuthType $DestAuthType -DisableSSLVerify
+New-DestinationSession -dstPVWAURL $DestPVWAURL -dstAuthType $DestAuthType
 
 Write-Host "Syncing accounts..." -ForegroundColor Cyan
 Sync-Accounts -VerifyPlatform -maxJobCount 10
