@@ -27,7 +27,7 @@ Write-Host "Connecting to DESTINATION..." -ForegroundColor Cyan
 New-DestinationSession -dstPVWAURL $DestPVWAURL -dstAuthType $DestAuthType
 
 Write-Host "Syncing safes..." -ForegroundColor Cyan
-Sync-Safes -CreateSafes -UpdateSafeMembers -CPMOverride $CPMOverride -maxJobCount 10
+Sync-Safes -CreateSafes -UpdateSafeMembers -CPMOverride $CPMOverride -OwnersToExclude @("Safe_Admin") -maxJobCount 10
 
 Write-Host "Done! Verify safes in the destination PVWA." -ForegroundColor Green
 Write-Host "Then run Step3-SyncAccounts.ps1" -ForegroundColor Yellow
