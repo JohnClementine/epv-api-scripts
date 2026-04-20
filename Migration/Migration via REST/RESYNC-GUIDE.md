@@ -6,6 +6,7 @@
 - Accounts already exist in the new environment (done in Step 3 previously)
 - CPM was turned on in the OLD environment, so some passwords may have been rotated
 - Goal: pull the (possibly new) passwords from OLD and push them to NEW
+- **Plan: turn OFF the OLD CPM before the sync.** It's fine if accounts stay locked in the old environment — that environment is on its way out anyway. (ReleaseAll.ps1 never worked reliably, don't bother with it.)
 
 ## Key facts to know before starting
 
@@ -13,13 +14,17 @@
 
 2. **The existing CSV is still valid.** The CSV only contains metadata (id, name, address, safe, platform, username). Passwords are always fetched live at sync time. Account IDs on the source don't change when CPM rotates passwords.
 
-3. **Running Sync-Accounts triggers checkouts on the source.** Every `Get-Secret` call counts as a checkout. With CPM now ON, the old environment might auto-release them after a timeout (and rotate again). Or they may lock again. Either way, ReleaseAll.ps1 is the safety net.
+3. **Running Sync-Accounts will lock accounts on the source.** Every `Get-Secret` call counts as a checkout. With CPM turned OFF on the old side, locked accounts will just stay locked — which is fine since we're done with that environment.
 
-4. **You cannot avoid a password change cycle if CPM is aggressive.** If CPM rotates on every checkout, every sync triggers another rotation. The new environment will get whatever was the password at the moment of retrieval.
+4. **Turn OFF CPM on the OLD environment before syncing.** Otherwise CPM could rotate passwords mid-sync and you'd get stale values pushed to the new environment.
 
 ## Tonight's runbook
 
-### Step 0: Backup what you have
+### Step 0a: Turn OFF the CPM on the OLD environment
+
+Do this FIRST. This prevents CPM from rotating passwords while you're syncing, which would give the new environment stale values.
+
+### Step 0b: Backup what you have
 
 Before anything, back up the existing CSV in case you want to compare before/after.
 
@@ -60,15 +65,9 @@ This is the main event. It will:
 
 Watch the output. Per-account logs go to `.\LogFiles-Accounts\`. Expect it to take roughly as long as the original run.
 
-### Step 4: Release locked accounts on SOURCE
+### Step 4: Don't bother releasing accounts on the OLD environment
 
-Same as last time. Many accounts will be checked out by your admin user from the Get-Secret calls.
-
-```powershell
-.\ReleaseAll.ps1
-```
-
-Enter your old environment `administrator` credentials (or edit the `$AuthType` at the top of the script to `"ldap"` if you prefer to use your LDAP account).
+With CPM off on the OLD side, locked accounts will just sit there. That's fine — we're done with that environment. Skip ReleaseAll.ps1.
 
 ## What to expect
 
@@ -84,6 +83,5 @@ Enter your old environment `administrator` credentials (or edit the `$AuthType` 
 
 ## After you're done
 
-1. Spot-check a handful of accounts in the NEW PVWA. Pick ones you know had activity — try to retrieve the password and confirm it matches what's currently in the OLD environment.
-2. Run `.\ReleaseAll.ps1` one more time if you see lots of checked-out accounts in the OLD environment.
-3. If your org plans to keep the OLD environment around for a bit: keep CPM on ONLY the NEW environment going forward to avoid dual-rotation confusion.
+1. Spot-check a handful of accounts in the NEW PVWA. Pick ones you know had activity — try to retrieve the password and confirm it works.
+2. CPM stays OFF on the OLD environment and ON only on the NEW environment going forward. No dual-rotation confusion.
