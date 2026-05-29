@@ -1,0 +1,4 @@
+AccountID,Name,Username,Address,SafeName,PlatformID,SecretType,Environment,Location,Notes,_AutomaticManagementEnabled,_CreatedTime
+12_34,Operating System-WinServerLocal-srv01-Administrator,Administrator,srv01.corp.local,WindowsServers,WinServerLocal,password,Production,\Applications,Patched 2026-05 - owner Jane,true,2025-01-10 08:14:02Z
+12_35,Operating System-UnixSSH-db01-root,root,db01.corp.local,UnixServers,UnixSSH,password,Production,\Databases,Break-glass account,true,2025-02-22 11:03:55Z
+12_36,Database-Oracle-fin01-oraadmin,oraadmin,fin01.corp.local,OracleSafe,Oracle,password,Staging,\Finance,,false,2025-03-15 17:42:10Z

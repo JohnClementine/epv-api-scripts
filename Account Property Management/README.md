@@ -1,0 +1,236 @@
+# Account Property Management (Export / Import custom File Categories)
+
+A two-step PowerShell workflow for bulk-editing **custom File Categories /
+account properties** (such as `Notes`) on CyberArk **Privilege Cloud (ISPSS)**
+or self-hosted **PVWA** accounts:
+
+1. **Export** every account (with pagination) to a CSV, including all custom
+   File Categories returned by CyberArk.
+2. **Edit** the CSV by hand to add/update property values.
+3. **Import** the edited CSV to update the matching existing accounts, keyed by
+   the CyberArk **account ID**.
+
+> `Notes` is **not** a special password field. It is treated as an ordinary
+> custom File Category / account property (`platformAccountProperties`), exactly
+> like any other custom property returned by CyberArk.
+
+These scripts **only read account metadata**. They never retrieve passwords,
+never change passwords, and never trigger password-management actions. Updates
+are restricted to `/platformAccountProperties/*` (File Categories).
+
+---
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `Export-CyberArkAccountsToCsv.ps1` | Export all accounts + custom properties to CSV. |
+| `Import-CyberArkAccountPropertyUpdates.ps1` | Update selected custom properties on existing accounts from CSV. |
+| `CyberArkAccountProperties.psm1` | Shared helper module (auth, pagination, REST, flattening, JSON-Patch). |
+| `sample-accounts.csv` | Small fictional example of the export/import CSV shape. |
+
+The scripts auto-import the helper module from the same folder, so keep the
+three `.ps1`/`.psm1` files together.
+
+---
+
+## Requirements
+
+- Windows PowerShell **5.1+** or PowerShell **7+**.
+- Network access to your CyberArk tenant (and to CyberArk Identity for OAuth).
+- A user/identity with permission to **list accounts**, **view account details**,
+  and **update account properties** in the relevant safes.
+
+---
+
+## Authentication
+
+Both scripts share the same authentication options via `-PVWAUrl`,
+`-Credential`, `-LogonToken` and `-AuthType`.
+
+### 1. OAuth client credentials (default, recommended for ISPSS automation)
+
+`-Credential` username = OAuth **Client ID**, password = OAuth **Client Secret**.
+The CyberArk Identity tenant URL is auto-discovered from `-PVWAUrl`
+(override with `-IdentityTenantURL` if discovery fails).
+
+```powershell
+$cred = Get-Credential   # Username = OAuth client ID, Password = client secret
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -Credential $cred `
+    -OutputCsv .\accounts.csv
+```
+
+### 2. Pre-obtained token / Identity header (interactive or MFA logins)
+
+Use the repository's [Identity Authentication](../Identity%20Authentication)
+module to handle MFA/SAML, then pass the resulting header via `-LogonToken`.
+The session is **not** logged off when you pass a token.
+
+```powershell
+Import-Module '..\Identity Authentication\IdentityAuth.psm1'
+$hdr = Get-IdentityHeader -IdentityUserName 'me@corp.com' `
+    -PCloudURL 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault'
+
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -LogonToken $hdr -OutputCsv .\accounts.csv
+```
+
+### 3. Classic PVWA logon (self-hosted)
+
+```powershell
+$cred = Get-Credential   # vault username + password
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://pvwa.corp.local/PasswordVault' `
+    -AuthType CyberArk -Credential $cred `
+    -OutputCsv .\accounts.csv
+# Add -SkipCertificateValidation for self-signed lab certificates.
+```
+
+---
+
+## Step 1 — Export
+
+```powershell
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -Credential $cred `
+    -OutputCsv .\accounts.csv
+```
+
+Useful options:
+
+- `-SafeName 'WindowsServers'` — export a single safe only.
+- `-Search 'admin'` — free-text filter.
+- `-FetchAccountDetails Always|Auto|Never` — `Auto` (default) fetches full
+  per-account details only when the list payload does not already include the
+  custom properties; `Always` forces a detail call per account; `Never` is
+  fastest but may omit some custom properties.
+- `-PageSize 1000` — accounts per API page.
+
+### CSV columns
+
+| Column group | Examples | Editable? |
+|--------------|----------|-----------|
+| **Identity / locator** | `AccountID`, `Name`, `Username`, `Address`, `SafeName`, `PlatformID`, `SecretType` | Used to identify the account; **not changed** by the import. |
+| **Custom File Categories** | `Notes`, `Environment`, `Location`, `OwnerName`, `Port`, ... (one column per property) | **Yes** — edit these. |
+| **Metadata (underscore-prefixed)** | `_AutomaticManagementEnabled`, `_ManualManagementReason`, `_CreatedTime`, `_CategoryModificationTime` | Read-only / informational; ignored by the import. |
+
+- The CSV contains the **union** of every custom property across all accounts;
+  an account that does not have a given property shows a blank cell for it.
+- A custom property whose name collides with a base column (rare) is prefixed
+  with `FC_` (e.g. `FC_Name`).
+
+---
+
+## Step 2 — Edit the CSV
+
+Open the CSV in Excel / a text editor and edit only the custom property columns
+you intend to change (for example, fill in `Notes`).
+
+- **Keep the `AccountID` column** — it is the authoritative key.
+- Leave a cell blank to make **no change** to that property (default behaviour).
+- You do not need to keep columns you are not updating, but it does no harm to.
+
+---
+
+## Step 3 — Import (dry-run first!)
+
+Always preview with `-WhatIf` (or `-DryRun`) before a real run.
+
+### Dry-run
+
+```powershell
+.\Import-CyberArkAccountPropertyUpdates.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -Credential $cred `
+    -InputCsv .\accounts.csv `
+    -PropertiesToUpdate Notes,Environment `
+    -WhatIf
+```
+
+### Real run
+
+```powershell
+.\Import-CyberArkAccountPropertyUpdates.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -Credential $cred `
+    -InputCsv .\accounts.csv `
+    -PropertiesToUpdate Notes,Environment `
+    -LogPath .\import.log
+```
+
+Behaviour:
+
+- **`-PropertiesToUpdate`** lists exactly which columns/properties may change.
+  Everything else in the CSV is ignored.
+- For each property: a value that is **new** is added, a value that **differs**
+  from the current value is replaced, and an **unchanged** value is skipped.
+- **Blank cells** are left untouched by default. Use **`-RemoveEmptyValues`** to
+  remove a property when its cell is blank.
+- Rows are independent: if one row fails, the script logs it and continues.
+- Use **`-ThrottleMs 200`** to pace requests if you hit rate limits (HTTP 429).
+  The helper also retries 429/5xx/network errors with exponential back-off.
+
+---
+
+## Logging & results
+
+- **`-LogPath`** — timestamped text log (mirrors console output). Used by both
+  scripts; defaults to `.\CyberArk-AccountProperties-<timestamp>.log`.
+- The import additionally writes a **per-row results CSV** next to the log
+  (`<logname>.results.csv`) and returns the same result objects to the pipeline.
+
+Per-row result columns: `Row`, `AccountID`, `Name`, `SafeName`,
+`ChangedFields`, `Status`, `Error`.
+
+Possible `Status` values:
+
+| Status | Meaning |
+|--------|---------|
+| `Updated` | Account was patched. |
+| `WouldUpdate` | Dry-run/`-WhatIf`: change detected but not applied. |
+| `NoChange` | Desired values already match the account. |
+| `NotFound` | No account exists for that AccountID (HTTP 404). |
+| `Skipped` | Missing AccountID (or skipped at a confirmation prompt). |
+| `Error` | Update failed; see `Error` column / log. |
+
+---
+
+## Parameter quick reference
+
+Common to both scripts:
+
+| Parameter | Description |
+|-----------|-------------|
+| `-PVWAUrl` | Privilege Cloud / PVWA base URL. |
+| `-Credential` | Auth credential (OAuth client ID/secret, or vault user/pass). |
+| `-LogonToken` | Pre-obtained header hashtable or token string. |
+| `-AuthType` | `OAuth` (default), `CyberArk`, `LDAP`, `RADIUS`. |
+| `-IdentityTenantURL` | Override Identity tenant discovery (OAuth). |
+| `-LogPath` | Text log file path. |
+| `-SkipCertificateValidation` | Ignore TLS cert errors (self-hosted labs). |
+
+Export-only: `-OutputCsv`, `-SafeName`, `-Search`, `-PageSize`,
+`-FetchAccountDetails`, `-Delimiter`, `-ConcurrentSession`.
+
+Import-only: `-InputCsv`, `-PropertiesToUpdate`, `-AccountIDColumn`,
+`-RemoveEmptyValues`, `-WhatIf` / `-DryRun`, `-ThrottleMs`, `-Delimiter`,
+`-ConcurrentSession`.
+
+---
+
+## How it maps to the CyberArk REST API
+
+| Step | API call |
+|------|----------|
+| Authenticate (OAuth) | `POST {IdentityTenant}/oauth2/platformtoken` |
+| Authenticate (classic) | `POST {PVWAUrl}/api/auth/{AuthType}/Logon` |
+| List accounts | `GET {PVWAUrl}/api/Accounts?limit=&offset=` (paginated) |
+| Account details | `GET {PVWAUrl}/api/Accounts/{id}` |
+| Update properties | `PATCH {PVWAUrl}/api/Accounts/{id}` with `[{op,path,value}]` against `/platformAccountProperties/*` |
+
+See the [CyberArk Privilege Cloud ISPSS REST API Cookbook](../.REST%20API%20Cookbooks/CyberArk%20Privilege%20Cloud%20ISPSS%20REST%20API%20Cookbook)
+in this repository for more API examples.
