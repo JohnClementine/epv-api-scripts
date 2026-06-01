@@ -276,6 +276,10 @@ function Get-CARestError {
     if ($ex -and $ex.Response) {
         try { $result.StatusCode = [int]$ex.Response.StatusCode } catch { }
     }
+    # Fall back to a status code attached to the exception's Data dictionary
+    if ($null -eq $result.StatusCode -and $ex -and $ex.Data -and $ex.Data['StatusCode']) {
+        try { $result.StatusCode = [int]$ex.Data['StatusCode'] } catch { }
+    }
 
     # PowerShell 7 usually exposes the response body here
     if ($ErrorRecord.ErrorDetails -and -not [string]::IsNullOrEmpty($ErrorRecord.ErrorDetails.Message)) {
@@ -966,8 +970,8 @@ function Get-CAPropertyUpdateOperation {
             $map         = $editableBase[$baseKey]
             $currentBase = ConvertTo-CAStringValue (Get-CABaseFieldValue -Account $Account -Property $map.Property)
             if ($currentBase -ne $desired) {
-                $operations.Add([ordered]@{ op = 'replace'; path = $map.Path; value = $desired })
-                $changed.Add("{0}: '{1}' -> '{2}'" -f $baseKey, $currentBase, $desired)
+                $operations.Add([pscustomobject][ordered]@{ op = 'replace'; path = $map.Path; value = $desired })
+                $changed.Add(("{0}: '{1}' -> '{2}'" -f $baseKey, $currentBase, $desired))
             }
             continue
         }
@@ -984,20 +988,20 @@ function Get-CAPropertyUpdateOperation {
 
         if ($isEmpty) {
             if ($RemoveEmptyValues -and $exists) {
-                $operations.Add([ordered]@{ op = 'remove'; path = "/platformAccountProperties/$canonical" })
-                $changed.Add("{0}: '{1}' -> (removed)" -f $canonical, $current)
+                $operations.Add([pscustomobject][ordered]@{ op = 'remove'; path = "/platformAccountProperties/$canonical" })
+                $changed.Add(("{0}: '{1}' -> (removed)" -f $canonical, $current))
             }
             continue
         }
 
         if ($exists) {
             if ($current -ne $desired) {
-                $operations.Add([ordered]@{ op = 'replace'; path = "/platformAccountProperties/$canonical"; value = $desired })
-                $changed.Add("{0}: '{1}' -> '{2}'" -f $canonical, $current, $desired)
+                $operations.Add([pscustomobject][ordered]@{ op = 'replace'; path = "/platformAccountProperties/$canonical"; value = $desired })
+                $changed.Add(("{0}: '{1}' -> '{2}'" -f $canonical, $current, $desired))
             }
         } else {
-            $operations.Add([ordered]@{ op = 'add'; path = "/platformAccountProperties/$name"; value = $desired })
-            $changed.Add("{0}: (none) -> '{1}'" -f $name, $desired)
+            $operations.Add([pscustomobject][ordered]@{ op = 'add'; path = "/platformAccountProperties/$name"; value = $desired })
+            $changed.Add(("{0}: (none) -> '{1}'" -f $name, $desired))
         }
     }
 
@@ -1008,7 +1012,15 @@ function Get-CAPropertyUpdateOperation {
 }
 
 function ConvertTo-CAJsonArray {
-    <#.SYNOPSIS Serialises a list of operations to a JSON array (always bracketed).#>
+    <#
+    .SYNOPSIS
+        Serialises a collection of operation objects to a JSON array string.
+    .DESCRIPTION
+        Each item is serialised individually and the results are joined into a
+        bracketed array. This avoids a ConvertTo-Json quirk where passing an
+        @()-wrapped collection throws "Argument types do not match", and it
+        always produces a JSON array for 0, 1 or many items.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -1018,11 +1030,12 @@ function ConvertTo-CAJsonArray {
         [int]$Depth = 6
     )
 
-    $json = ConvertTo-Json -InputObject @($Items) -Depth $Depth
-    if (-not $json.TrimStart().StartsWith('[')) {
-        $json = "[$json]"
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($item in $Items) {
+        $parts.Add((ConvertTo-Json -InputObject $item -Depth $Depth -Compress))
     }
-    return $json
+    if ($parts.Count -eq 0) { return '[]' }
+    return '[' + ($parts -join ',') + ']'
 }
 
 Export-ModuleMember -Function @(
