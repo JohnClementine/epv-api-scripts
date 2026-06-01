@@ -355,47 +355,148 @@ function Invoke-CARest {
 # ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
-function Resolve-CAIdentityUrl {
+function Import-CAIdentityModule {
     <#
     .SYNOPSIS
-        Auto-discovers the CyberArk Identity tenant URL from a Privilege
-        Cloud URL by following the portal redirect.
+        Ensures the repository's IdentityAuth.psm1 module (Get-IdentityHeader)
+        is loaded.
+    .DESCRIPTION
+        Looks for an already-loaded Get-IdentityHeader, then for IdentityAuth.psm1
+        next to this module, in the sibling "Identity Authentication" repo folder,
+        or in the current directory. With -AllowDownload it falls back to fetching
+        the module from the epv-api-scripts repo (same pattern other scripts use).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        [string]$ModulePath,
+
+        [switch]$AllowDownload
+    )
+
+    if (Get-Command -Name Get-IdentityHeader -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrEmpty($ModulePath)) { $candidates.Add($ModulePath) }
+    if ($PSScriptRoot) {
+        $candidates.Add((Join-Path $PSScriptRoot '..\Identity Authentication\IdentityAuth.psm1'))
+        $candidates.Add((Join-Path $PSScriptRoot 'IdentityAuth.psm1'))
+    }
+    $candidates.Add((Join-Path (Get-Location).Path 'IdentityAuth.psm1'))
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrEmpty($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            $resolved = (Resolve-Path -LiteralPath $candidate).Path
+            Import-Module $resolved -Force -Global -ErrorAction Stop
+            Write-CALog -Type Info -Message "Loaded Identity Authentication module: $resolved"
+            if (Get-Command -Name Get-IdentityHeader -ErrorAction SilentlyContinue) { return }
+        }
+    }
+
+    if ($AllowDownload) {
+        try {
+            $dest = Join-Path (Get-Location).Path 'IdentityAuth.psm1'
+            Write-CALog -Type Warning -Message "IdentityAuth.psm1 not found locally; downloading it from the epv-api-scripts repository..."
+            Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/cyberark/epv-api-scripts/main/Identity%20Authentication/IdentityAuth.psm1' -OutFile $dest -UseBasicParsing -ErrorAction Stop
+            Import-Module $dest -Force -Global -ErrorAction Stop
+            if (Get-Command -Name Get-IdentityHeader -ErrorAction SilentlyContinue) { return }
+        } catch {
+            throw "Failed to download/import IdentityAuth.psm1: $($_.Exception.Message)"
+        }
+    }
+
+    throw "Could not locate IdentityAuth.psm1. Run these scripts from inside the epv-api-scripts repo (so '..\Identity Authentication\IdentityAuth.psm1' resolves), pass -IdentityAuthModulePath, use -DownloadIdentityAuth, or supply a -LogonToken obtained from Get-IdentityHeader."
+}
+
+function Get-CAIdentityHeader {
+    <#
+    .SYNOPSIS
+        Authenticates to CyberArk Identity by delegating to the repository's
+        Get-IdentityHeader (IdentityAuth.psm1).
+    .DESCRIPTION
+        Imports IdentityAuth.psm1 and calls Get-IdentityHeader, adapting to the
+        parameters the installed module version exposes (PCloudURL vs
+        PCloudTenantAPIURL, optional psPASFormat/IdentityTenantURL). Supports
+        OAuth client credentials, username/password, and interactive (username)
+        flows - the module itself handles any MFA / push / SAML+PIN challenges.
+    .OUTPUTS
+        Whatever Get-IdentityHeader returns (a header hashtable or a token string);
+        normalise it with ConvertTo-CAHeader.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
-        [string]$PVWAUrl
+        [string]$PVWAUrl,
+
+        [Parameter()]
+        [ValidateSet('Identity', 'OAuth')]
+        [string]$Mode = 'Identity',
+
+        [Parameter()]
+        [System.Management.Automation.PSCredential]$Credential,
+
+        [Parameter()]
+        [string]$IdentityUserName,
+
+        [Parameter()]
+        [string]$IdentityTenantURL,
+
+        [Parameter()]
+        [string]$ModulePath,
+
+        [switch]$AllowDownload,
+
+        [switch]$ForceNewSession
     )
 
-    $lower = $PVWAUrl.ToLower()
-    if ($lower -match '^(?:https?):\/\/(?<sub>[^.]+)\.privilegecloud\.cyberark\.(?<top>cloud|com)') {
-        $pcloudBase = "https://$($Matches['sub']).cyberark.$($Matches['top'])"
+    Import-CAIdentityModule -ModulePath $ModulePath -AllowDownload:$AllowDownload
+
+    $command   = Get-Command -Name Get-IdentityHeader -ErrorAction Stop
+    $supported = $command.Parameters.Keys
+    $splat     = @{}
+
+    # The PCloud URL parameter name differs between module versions.
+    if ($supported -contains 'PCloudURL') {
+        $splat['PCloudURL'] = $PVWAUrl
+    } elseif ($supported -contains 'PCloudTenantAPIURL') {
+        $splat['PCloudTenantAPIURL'] = $PVWAUrl
     } else {
-        throw "Could not derive the Privilege Cloud base URL from '$PVWAUrl'. Provide -IdentityTenantURL explicitly."
+        throw "The loaded Get-IdentityHeader does not expose a recognised PCloud URL parameter (PCloudURL / PCloudTenantAPIURL)."
     }
 
-    Write-CALog -Type Debug -Message "Discovering Identity tenant URL from $pcloudBase"
-
-    try {
-        $resp = Invoke-WebRequest -Uri $pcloudBase -UseBasicParsing -ErrorAction Stop
-        $identityHost = $null
-        if ($resp.BaseResponse.ResponseUri) {
-            $identityHost = $resp.BaseResponse.ResponseUri.Host
-        } elseif ($resp.BaseResponse.RequestMessage -and $resp.BaseResponse.RequestMessage.RequestUri) {
-            $identityHost = $resp.BaseResponse.RequestMessage.RequestUri.Host
-        } elseif ($resp.Headers.Location) {
-            $identityHost = ([Uri]$resp.Headers.Location).Host
-        }
-        if ([string]::IsNullOrEmpty($identityHost)) {
-            throw "redirect host could not be determined"
-        }
-        return "https://$identityHost"
-    } catch {
-        if ($_.Exception.Response -and $_.Exception.Response.ResponseUri) {
-            return "https://$($_.Exception.Response.ResponseUri.Host)"
-        }
-        throw "Failed to auto-discover the Identity tenant URL from '$pcloudBase'. Provide -IdentityTenantURL explicitly. Error: $($_.Exception.Message)"
+    if (-not [string]::IsNullOrEmpty($IdentityTenantURL) -and ($supported -contains 'IdentityTenantURL')) {
+        $splat['IdentityTenantURL'] = $IdentityTenantURL
     }
+    # Older module versions need -psPASFormat to return a header hashtable.
+    if ($supported -contains 'psPASFormat') {
+        $splat['psPASFormat'] = $true
+    }
+    if ($ForceNewSession -and ($supported -contains 'ForceNewSession')) {
+        $splat['ForceNewSession'] = $true
+    }
+
+    if ($Mode -eq 'OAuth') {
+        if (-not $Credential) { throw "OAuth Identity authentication requires -Credential (OAuth client ID as the username, client secret as the password)." }
+        if (-not ($supported -contains 'OAuthCreds')) { throw "The loaded Get-IdentityHeader does not support -OAuthCreds." }
+        $splat['OAuthCreds'] = $Credential
+    } elseif ($Credential) {
+        if (-not ($supported -contains 'UPCreds')) { throw "The loaded Get-IdentityHeader does not support -UPCreds." }
+        $splat['UPCreds'] = $Credential
+    } elseif (-not [string]::IsNullOrEmpty($IdentityUserName)) {
+        if (-not ($supported -contains 'IdentityUserName')) { throw "The loaded Get-IdentityHeader does not support -IdentityUserName." }
+        $splat['IdentityUserName'] = $IdentityUserName
+    } else {
+        throw "Identity authentication requires one of -Credential, -IdentityUserName, or -LogonToken."
+    }
+
+    Write-CALog -Type Info -Message "Authenticating via IdentityAuth.psm1 (Get-IdentityHeader, mode: $Mode)..."
+    $result = Get-IdentityHeader @splat
+    if ($null -eq $result) {
+        throw "Get-IdentityHeader returned nothing - authentication failed."
+    }
+    return $result
 }
 
 function ConvertTo-CAHeader {
@@ -430,66 +531,6 @@ function ConvertTo-CAHeader {
     }
     # Otherwise assume a classic PVWA session token (used raw)
     return @{ 'Authorization' = $token }
-}
-
-function Get-CAIdentityOAuthHeader {
-    <#.SYNOPSIS Performs OAuth2 client-credentials auth against CyberArk Identity.#>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)]
-        [string]$PVWAUrl,
-
-        [Parameter(Mandatory)]
-        [System.Management.Automation.PSCredential]$Credential,
-
-        [Parameter()]
-        [string]$IdentityTenantURL,
-
-        [switch]$SkipCertificateValidation
-    )
-
-    if ([string]::IsNullOrEmpty($IdentityTenantURL)) {
-        $IdentityTenantURL = Resolve-CAIdentityUrl -PVWAUrl $PVWAUrl
-    }
-    if ($IdentityTenantURL -notmatch '^(?i)https?://') {
-        $IdentityTenantURL = "https://$IdentityTenantURL"
-    }
-    $IdentityTenantURL = $IdentityTenantURL.TrimEnd('/')
-
-    $tokenUrl = "$IdentityTenantURL/oauth2/platformtoken"
-    Write-CALog -Type Debug -Message "Requesting OAuth platform token from $tokenUrl"
-
-    $body = @{
-        grant_type    = 'client_credentials'
-        client_id     = $Credential.UserName
-        client_secret = $Credential.GetNetworkCredential().Password
-    }
-
-    $irmParams = @{
-        Uri         = $tokenUrl
-        Method      = 'Post'
-        Body        = $body
-        ContentType = 'application/x-www-form-urlencoded'
-        ErrorAction = 'Stop'
-    }
-    if ($SkipCertificateValidation -and $PSVersionTable.PSEdition -eq 'Core') {
-        $irmParams.SkipCertificateCheck = $true
-    }
-
-    try {
-        $resp = Invoke-RestMethod @irmParams
-    } catch {
-        throw "OAuth token request to $tokenUrl failed: $($_.Exception.Message)"
-    }
-
-    if ([string]::IsNullOrEmpty($resp.access_token)) {
-        throw "OAuth token request did not return an access_token."
-    }
-
-    return @{
-        'Authorization'        = "Bearer $($resp.access_token)"
-        'X-IDAP-NATIVE-CLIENT' = 'true'
-    }
 }
 
 function Get-CAClassicLogonHeader {
@@ -556,9 +597,13 @@ function New-CASession {
         Authenticates to CyberArk and returns a reusable session object.
     .DESCRIPTION
         Resolution order:
-          1. -LogonToken supplied  -> use it as-is (no logoff performed)
-          2. -AuthType OAuth       -> CyberArk Identity OAuth client credentials
-          3. -AuthType CyberArk/LDAP/RADIUS -> classic PVWA logon
+          1. -LogonToken supplied            -> use it as-is (no logoff performed)
+          2. -AuthType Identity (default)     -> CyberArk Identity via IdentityAuth.psm1
+                                                 (interactive / username+password,
+                                                 with MFA handled by the module)
+          3. -AuthType OAuth                  -> CyberArk Identity OAuth client
+                                                 credentials via IdentityAuth.psm1
+          4. -AuthType CyberArk/LDAP/RADIUS   -> classic PVWA logon (self-hosted)
     .OUTPUTS
         PSCustomObject with: PVWAUrl, ApiBase, Headers, AuthType, CanLogoff,
         SkipCertCheck.
@@ -576,11 +621,19 @@ function New-CASession {
         $LogonToken,
 
         [Parameter()]
-        [ValidateSet('OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
-        [string]$AuthType = 'OAuth',
+        [ValidateSet('Identity', 'OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
+        [string]$AuthType = 'Identity',
+
+        [Parameter()]
+        [string]$IdentityUserName,
 
         [Parameter()]
         [string]$IdentityTenantURL,
+
+        [Parameter()]
+        [string]$IdentityAuthModulePath,
+
+        [switch]$DownloadIdentityAuth,
 
         [Parameter()]
         [string]$RadiusOTP,
@@ -604,13 +657,16 @@ function New-CASession {
         $resolvedAuth = 'Token'
         $canLogoff    = $false
         Write-CALog -Type Info -Message "Using supplied logon token (the session will NOT be logged off)."
-    } elseif ($AuthType -eq 'OAuth') {
-        if (-not $Credential) {
-            throw "OAuth authentication requires -Credential (OAuth client ID as the username, client secret as the password)."
-        }
-        $headers   = Get-CAIdentityOAuthHeader -PVWAUrl $PVWAUrl -Credential $Credential -IdentityTenantURL $IdentityTenantURL -SkipCertificateValidation:$SkipCertificateValidation
-        $canLogoff = $false   # platform tokens expire on their own
-        Write-CALog -Type Success -Message "Authenticated to CyberArk Identity (OAuth client credentials)."
+    } elseif ($AuthType -eq 'Identity' -or $AuthType -eq 'OAuth') {
+        $mode = 'Identity'
+        if ($AuthType -eq 'OAuth') { $mode = 'OAuth' }
+        $result = Get-CAIdentityHeader -PVWAUrl $PVWAUrl -Mode $mode -Credential $Credential `
+            -IdentityUserName $IdentityUserName -IdentityTenantURL $IdentityTenantURL `
+            -ModulePath $IdentityAuthModulePath -AllowDownload:$DownloadIdentityAuth
+        $headers      = ConvertTo-CAHeader -LogonToken $result
+        $resolvedAuth = 'Identity'
+        $canLogoff    = $false   # the Identity module manages its own session/token lifetime
+        Write-CALog -Type Success -Message "Authenticated to CyberArk Identity via IdentityAuth.psm1."
     } else {
         if (-not $Credential) {
             throw "$AuthType authentication requires -Credential."
@@ -646,7 +702,7 @@ function Close-CASession {
             Write-CALog -Type Warning -Message "Logoff failed: $($_.Exception.Message)"
         }
     } else {
-        Write-CALog -Type Debug -Message "Token/OAuth session - no logoff performed."
+        Write-CALog -Type Debug -Message "Identity / OAuth / token session - no logoff performed."
     }
 }
 
@@ -918,9 +974,9 @@ Export-ModuleMember -Function @(
     'Set-CACertificateValidation',
     'Get-CARestError',
     'Invoke-CARest',
-    'Resolve-CAIdentityUrl',
+    'Import-CAIdentityModule',
+    'Get-CAIdentityHeader',
     'ConvertTo-CAHeader',
-    'Get-CAIdentityOAuthHeader',
     'Get-CAClassicLogonHeader',
     'New-CASession',
     'Close-CASession',

@@ -42,10 +42,23 @@
     Pre-obtained authorization token / Identity header (see Export script).
 
 .PARAMETER AuthType
-    OAuth (default), CyberArk, LDAP or RADIUS. Ignored when -LogonToken is used.
+    Identity (default), OAuth, CyberArk, LDAP or RADIUS. Identity and OAuth both
+    authenticate through the repo's IdentityAuth.psm1. Ignored with -LogonToken.
+
+.PARAMETER IdentityUserName
+    Identity username for an interactive (username + MFA) login via
+    IdentityAuth.psm1. Used with -AuthType Identity when no -Credential is given.
 
 .PARAMETER IdentityTenantURL
-    Optional CyberArk Identity tenant URL (OAuth only; auto-discovered if omitted).
+    Optional CyberArk Identity tenant URL passed through to IdentityAuth.psm1
+    (auto-discovered by the module if omitted).
+
+.PARAMETER IdentityAuthModulePath
+    Optional explicit path to IdentityAuth.psm1 (defaults to the sibling
+    "Identity Authentication\IdentityAuth.psm1" in the repo).
+
+.PARAMETER DownloadIdentityAuth
+    Download IdentityAuth.psm1 from the epv-api-scripts repo if not found locally.
 
 .PARAMETER LogPath
     Text log file path. A per-row results CSV is written alongside it
@@ -75,20 +88,20 @@
     Optional millisecond pause between rows (helps avoid rate limiting).
 
 .EXAMPLE
-    # Dry run - show exactly what would change, write nothing
-    $cred = Get-Credential
+    # Dry run - interactive Identity login (MFA handled by IdentityAuth.psm1)
     .\Import-CyberArkAccountPropertyUpdates.ps1 `
         -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-        -Credential $cred `
+        -IdentityUserName 'me@corp.com' `
         -InputCsv .\accounts-edited.csv `
         -PropertiesToUpdate Notes,Environment `
         -WhatIf
 
 .EXAMPLE
-    # Real run
+    # Real run - OAuth client credentials (headless), via IdentityAuth.psm1
+    $oauth = Get-Credential   # Username = OAuth client ID, Password = client secret
     .\Import-CyberArkAccountPropertyUpdates.ps1 `
         -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-        -Credential $cred `
+        -AuthType OAuth -Credential $oauth `
         -InputCsv .\accounts-edited.csv `
         -PropertiesToUpdate Notes,Environment `
         -LogPath .\import.log
@@ -115,11 +128,20 @@ param(
     $LogonToken,
 
     [Parameter()]
-    [ValidateSet('OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
-    [string]$AuthType = 'OAuth',
+    [ValidateSet('Identity', 'OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
+    [string]$AuthType = 'Identity',
+
+    [Parameter()]
+    [string]$IdentityUserName,
 
     [Parameter()]
     [string]$IdentityTenantURL,
+
+    [Parameter()]
+    [string]$IdentityAuthModulePath,
+
+    [Parameter()]
+    [switch]$DownloadIdentityAuth,
 
     [Parameter()]
     [string]$LogPath,
@@ -213,16 +235,23 @@ try {
     Write-CALog -Type Info -Message "Effective properties: $($effectiveProps -join ', ')"
 
     # ----- Authenticate ---------------------------------------------------
-    if (-not $Credential -and ($null -eq $LogonToken)) {
-        $Credential = Get-Credential -Message "Enter CyberArk credentials (OAuth client ID/secret, or vault username/password)"
+    if ($null -eq $LogonToken) {
+        if ($AuthType -eq 'Identity' -and -not $Credential -and [string]::IsNullOrEmpty($IdentityUserName)) {
+            $IdentityUserName = Read-Host -Prompt "Enter your CyberArk Identity username (e.g. you@corp.com)"
+        } elseif ($AuthType -ne 'Identity' -and -not $Credential) {
+            $Credential = Get-Credential -Message "Enter CyberArk credentials (OAuth client ID/secret, or vault username/password)"
+        }
     }
 
     $connect = @{ PVWAUrl = $PVWAUrl; AuthType = $AuthType }
-    if ($Credential)                          { $connect.Credential = $Credential }
-    if ($null -ne $LogonToken)                { $connect.LogonToken = $LogonToken }
-    if (-not [string]::IsNullOrEmpty($IdentityTenantURL)) { $connect.IdentityTenantURL = $IdentityTenantURL }
-    if ($ConcurrentSession)                   { $connect.ConcurrentSession = $true }
-    if ($SkipCertificateValidation)           { $connect.SkipCertificateValidation = $true }
+    if ($Credential)                                          { $connect.Credential = $Credential }
+    if ($null -ne $LogonToken)                                { $connect.LogonToken = $LogonToken }
+    if (-not [string]::IsNullOrEmpty($IdentityUserName))      { $connect.IdentityUserName = $IdentityUserName }
+    if (-not [string]::IsNullOrEmpty($IdentityTenantURL))     { $connect.IdentityTenantURL = $IdentityTenantURL }
+    if (-not [string]::IsNullOrEmpty($IdentityAuthModulePath)) { $connect.IdentityAuthModulePath = $IdentityAuthModulePath }
+    if ($DownloadIdentityAuth)                                { $connect.DownloadIdentityAuth = $true }
+    if ($ConcurrentSession)                                   { $connect.ConcurrentSession = $true }
+    if ($SkipCertificateValidation)                           { $connect.SkipCertificateValidation = $true }
 
     $session = New-CASession @connect
 

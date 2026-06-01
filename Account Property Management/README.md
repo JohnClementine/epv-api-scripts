@@ -37,36 +37,61 @@ three `.ps1`/`.psm1` files together.
 ## Requirements
 
 - Windows PowerShell **5.1+** or PowerShell **7+**.
-- Network access to your CyberArk tenant (and to CyberArk Identity for OAuth).
+- Network access to your CyberArk tenant (and to CyberArk Identity).
 - A user/identity with permission to **list accounts**, **view account details**,
   and **update account properties** in the relevant safes.
+- For ISPSS auth, the repo's
+  [`Identity Authentication/IdentityAuth.psm1`](../Identity%20Authentication)
+  module. The scripts load it automatically from that sibling folder; override
+  with `-IdentityAuthModulePath`, or use `-DownloadIdentityAuth` to fetch it.
 
 ---
 
 ## Authentication
 
-Both scripts share the same authentication options via `-PVWAUrl`,
-`-Credential`, `-LogonToken` and `-AuthType`.
+ISPSS authentication is delegated to the repository's **`IdentityAuth.psm1`**
+(`Get-IdentityHeader`), so MFA / push / SAML+PIN are handled by that module.
+Both scripts share the same options via `-PVWAUrl`, `-AuthType`, `-Credential`,
+`-IdentityUserName` and `-LogonToken`.
 
-### 1. OAuth client credentials (default, recommended for ISPSS automation)
+### 1. Identity — interactive (default, recommended for a person at a keyboard)
 
-`-Credential` username = OAuth **Client ID**, password = OAuth **Client Secret**.
-The CyberArk Identity tenant URL is auto-discovered from `-PVWAUrl`
-(override with `-IdentityTenantURL` if discovery fails).
+Pass `-IdentityUserName`; the module prompts for the password and any MFA.
 
 ```powershell
-$cred = Get-Credential   # Username = OAuth client ID, Password = client secret
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -IdentityUserName 'me@corp.com' `
+    -OutputCsv .\accounts.csv
+```
+
+### 2. Identity — username + password (PSCredential)
+
+```powershell
+$cred = Get-Credential   # Identity username + password (MFA still prompts if configured)
 .\Export-CyberArkAccountsToCsv.ps1 `
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
     -Credential $cred `
     -OutputCsv .\accounts.csv
 ```
 
-### 2. Pre-obtained token / Identity header (interactive or MFA logins)
+### 3. OAuth client credentials (headless automation)
 
-Use the repository's [Identity Authentication](../Identity%20Authentication)
-module to handle MFA/SAML, then pass the resulting header via `-LogonToken`.
-The session is **not** logged off when you pass a token.
+`-Credential` username = OAuth **Client ID**, password = OAuth **Client Secret**.
+
+```powershell
+$oauth = Get-Credential   # Username = OAuth client ID, Password = client secret
+.\Export-CyberArkAccountsToCsv.ps1 `
+    -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+    -AuthType OAuth -Credential $oauth `
+    -OutputCsv .\accounts.csv
+```
+
+### 4. Pre-obtained token / Identity header
+
+Authenticate yourself with `Get-IdentityHeader` (handy when you want full
+control of the Identity flow) and pass the header via `-LogonToken`. The session
+is **not** logged off when you pass a token.
 
 ```powershell
 Import-Module '..\Identity Authentication\IdentityAuth.psm1'
@@ -78,7 +103,7 @@ $hdr = Get-IdentityHeader -IdentityUserName 'me@corp.com' `
     -LogonToken $hdr -OutputCsv .\accounts.csv
 ```
 
-### 3. Classic PVWA logon (self-hosted)
+### 5. Classic PVWA logon (self-hosted)
 
 ```powershell
 $cred = Get-Credential   # vault username + password
@@ -96,7 +121,7 @@ $cred = Get-Credential   # vault username + password
 ```powershell
 .\Export-CyberArkAccountsToCsv.ps1 `
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-    -Credential $cred `
+    -IdentityUserName 'me@corp.com' `
     -OutputCsv .\accounts.csv
 ```
 
@@ -145,7 +170,7 @@ Always preview with `-WhatIf` (or `-DryRun`) before a real run.
 ```powershell
 .\Import-CyberArkAccountPropertyUpdates.ps1 `
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-    -Credential $cred `
+    -IdentityUserName 'me@corp.com' `
     -InputCsv .\accounts.csv `
     -PropertiesToUpdate Notes,Environment `
     -WhatIf
@@ -154,9 +179,10 @@ Always preview with `-WhatIf` (or `-DryRun`) before a real run.
 ### Real run
 
 ```powershell
+$oauth = Get-Credential   # OAuth client ID + secret (or use -IdentityUserName)
 .\Import-CyberArkAccountPropertyUpdates.ps1 `
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-    -Credential $cred `
+    -AuthType OAuth -Credential $oauth `
     -InputCsv .\accounts.csv `
     -PropertiesToUpdate Notes,Environment `
     -LogPath .\import.log
@@ -206,10 +232,13 @@ Common to both scripts:
 | Parameter | Description |
 |-----------|-------------|
 | `-PVWAUrl` | Privilege Cloud / PVWA base URL. |
-| `-Credential` | Auth credential (OAuth client ID/secret, or vault user/pass). |
+| `-AuthType` | `Identity` (default), `OAuth`, `CyberArk`, `LDAP`, `RADIUS`. |
+| `-Credential` | Auth credential (Identity user/pass, OAuth client ID/secret, or vault user/pass). |
+| `-IdentityUserName` | Identity username for interactive (MFA) login via IdentityAuth.psm1. |
 | `-LogonToken` | Pre-obtained header hashtable or token string. |
-| `-AuthType` | `OAuth` (default), `CyberArk`, `LDAP`, `RADIUS`. |
-| `-IdentityTenantURL` | Override Identity tenant discovery (OAuth). |
+| `-IdentityTenantURL` | Identity tenant URL passed to IdentityAuth.psm1 (else auto-discovered). |
+| `-IdentityAuthModulePath` | Explicit path to IdentityAuth.psm1. |
+| `-DownloadIdentityAuth` | Fetch IdentityAuth.psm1 from the repo if not found locally. |
 | `-LogPath` | Text log file path. |
 | `-SkipCertificateValidation` | Ignore TLS cert errors (self-hosted labs). |
 
@@ -226,7 +255,7 @@ Import-only: `-InputCsv`, `-PropertiesToUpdate`, `-AccountIDColumn`,
 
 | Step | API call |
 |------|----------|
-| Authenticate (OAuth) | `POST {IdentityTenant}/oauth2/platformtoken` |
+| Authenticate (Identity / OAuth) | `IdentityAuth.psm1` `Get-IdentityHeader` (CyberArk Identity → Bearer token) |
 | Authenticate (classic) | `POST {PVWAUrl}/api/auth/{AuthType}/Logon` |
 | List accounts | `GET {PVWAUrl}/api/Accounts?limit=&offset=` (paginated) |
 | Account details | `GET {PVWAUrl}/api/Accounts/{id}` |

@@ -25,23 +25,36 @@
 
 .PARAMETER Credential
     Credential used to authenticate.
-      * AuthType OAuth (default, ISPSS): username = OAuth client ID,
-        password = OAuth client secret.
+      * AuthType Identity (default, ISPSS): vault/Identity username and password
+        (passed to IdentityAuth.psm1 as -UPCreds; MFA handled by the module).
+      * AuthType OAuth: username = OAuth client ID, password = OAuth client secret.
       * AuthType CyberArk/LDAP/RADIUS: vault username and password.
-    If neither -Credential nor -LogonToken is supplied you will be prompted.
 
 .PARAMETER LogonToken
-    A pre-obtained authorization token. Accepts the header hashtable returned
-    by the Identity Authentication module's Get-IdentityHeader (recommended for
-    interactive / MFA logins) or a raw token string. When supplied, the session
-    is NOT logged off.
+    A pre-obtained authorization token. Accepts the header hashtable returned by
+    IdentityAuth.psm1's Get-IdentityHeader or a raw token string. When supplied,
+    the session is NOT logged off.
 
 .PARAMETER AuthType
-    OAuth (default), CyberArk, LDAP or RADIUS. Ignored when -LogonToken is used.
+    Identity (default), OAuth, CyberArk, LDAP or RADIUS. Identity and OAuth both
+    authenticate through the repo's IdentityAuth.psm1. Ignored when -LogonToken
+    is used.
+
+.PARAMETER IdentityUserName
+    Identity username for an interactive (username + MFA) login via
+    IdentityAuth.psm1. Used with -AuthType Identity when no -Credential is given.
 
 .PARAMETER IdentityTenantURL
-    Optional CyberArk Identity tenant URL (e.g. https://abc1234.id.cyberark.cloud).
-    Auto-discovered from PVWAUrl when omitted (OAuth only).
+    Optional CyberArk Identity tenant URL (e.g. https://abc1234.id.cyberark.cloud)
+    passed through to IdentityAuth.psm1; auto-discovered by the module if omitted.
+
+.PARAMETER IdentityAuthModulePath
+    Optional explicit path to IdentityAuth.psm1. By default the sibling
+    "Identity Authentication\IdentityAuth.psm1" in the repo is used.
+
+.PARAMETER DownloadIdentityAuth
+    If IdentityAuth.psm1 cannot be found locally, download it from the
+    epv-api-scripts repository.
 
 .PARAMETER OutputCsv
     Destination CSV path. Defaults to .\CyberArkAccounts-<timestamp>.csv.
@@ -73,14 +86,22 @@
     CSV delimiter. Defaults to comma (round-trips cleanly with the importer).
 
 .EXAMPLE
-    $cred = Get-Credential   # OAuth client ID + secret
+    # Interactive Identity login (prompts for password + any MFA via IdentityAuth.psm1)
     .\Export-CyberArkAccountsToCsv.ps1 `
         -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
-        -Credential $cred `
+        -IdentityUserName 'me@corp.com' `
         -OutputCsv .\accounts.csv
 
 .EXAMPLE
-    # Interactive / MFA login using the Identity Authentication module
+    # OAuth client credentials (headless automation), via IdentityAuth.psm1
+    $oauth = Get-Credential   # Username = OAuth client ID, Password = client secret
+    .\Export-CyberArkAccountsToCsv.ps1 `
+        -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
+        -AuthType OAuth -Credential $oauth `
+        -OutputCsv .\accounts.csv
+
+.EXAMPLE
+    # Reuse a token you already obtained from Get-IdentityHeader
     Import-Module '..\Identity Authentication\IdentityAuth.psm1'
     $hdr = Get-IdentityHeader -IdentityUserName 'me@corp.com' -PCloudURL 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault'
     .\Export-CyberArkAccountsToCsv.ps1 -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' -LogonToken $hdr -OutputCsv .\accounts.csv
@@ -99,11 +120,20 @@ param(
     $LogonToken,
 
     [Parameter()]
-    [ValidateSet('OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
-    [string]$AuthType = 'OAuth',
+    [ValidateSet('Identity', 'OAuth', 'CyberArk', 'LDAP', 'RADIUS')]
+    [string]$AuthType = 'Identity',
+
+    [Parameter()]
+    [string]$IdentityUserName,
 
     [Parameter()]
     [string]$IdentityTenantURL,
+
+    [Parameter()]
+    [string]$IdentityAuthModulePath,
+
+    [Parameter()]
+    [switch]$DownloadIdentityAuth,
 
     [Parameter()]
     [Alias('path', 'OutPath')]
@@ -157,16 +187,23 @@ Write-CALog -Type Info    -Message "Fetch detail mode  : $FetchAccountDetails"
 $session = $null
 try {
     # ----- Authenticate ---------------------------------------------------
-    if (-not $Credential -and ($null -eq $LogonToken)) {
-        $Credential = Get-Credential -Message "Enter CyberArk credentials (OAuth client ID/secret, or vault username/password)"
+    if ($null -eq $LogonToken) {
+        if ($AuthType -eq 'Identity' -and -not $Credential -and [string]::IsNullOrEmpty($IdentityUserName)) {
+            $IdentityUserName = Read-Host -Prompt "Enter your CyberArk Identity username (e.g. you@corp.com)"
+        } elseif ($AuthType -ne 'Identity' -and -not $Credential) {
+            $Credential = Get-Credential -Message "Enter CyberArk credentials (OAuth client ID/secret, or vault username/password)"
+        }
     }
 
     $connect = @{ PVWAUrl = $PVWAUrl; AuthType = $AuthType }
-    if ($Credential)                          { $connect.Credential = $Credential }
-    if ($null -ne $LogonToken)                { $connect.LogonToken = $LogonToken }
-    if (-not [string]::IsNullOrEmpty($IdentityTenantURL)) { $connect.IdentityTenantURL = $IdentityTenantURL }
-    if ($ConcurrentSession)                   { $connect.ConcurrentSession = $true }
-    if ($SkipCertificateValidation)           { $connect.SkipCertificateValidation = $true }
+    if ($Credential)                                          { $connect.Credential = $Credential }
+    if ($null -ne $LogonToken)                                { $connect.LogonToken = $LogonToken }
+    if (-not [string]::IsNullOrEmpty($IdentityUserName))      { $connect.IdentityUserName = $IdentityUserName }
+    if (-not [string]::IsNullOrEmpty($IdentityTenantURL))     { $connect.IdentityTenantURL = $IdentityTenantURL }
+    if (-not [string]::IsNullOrEmpty($IdentityAuthModulePath)) { $connect.IdentityAuthModulePath = $IdentityAuthModulePath }
+    if ($DownloadIdentityAuth)                                { $connect.DownloadIdentityAuth = $true }
+    if ($ConcurrentSession)                                   { $connect.ConcurrentSession = $true }
+    if ($SkipCertificateValidation)                           { $connect.SkipCertificateValidation = $true }
 
     $session = New-CASession @connect
 
