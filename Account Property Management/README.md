@@ -139,21 +139,22 @@ Useful options:
 
 | Column group | Examples | Editable? |
 |--------------|----------|-----------|
-| **Identity / locator** | `AccountID`, `Name`, `Username`, `Address`, `SafeName`, `PlatformID`, `SecretType` | Used to identify the account; **not changed** by the import. |
+| **Editable top-level fields** | `Name`, `Username`, `Address` | **Yes** — list them in `-PropertiesToUpdate` to change them. |
+| **Keys / identity** | `AccountID`, `SafeName`, `PlatformID`, `SecretType` | Identify the account; **never changed** by the import. |
 | **Custom File Categories** | `Notes`, `Environment`, `Location`, `OwnerName`, `Port`, ... (one column per property) | **Yes** — edit these. |
 | **Metadata (underscore-prefixed)** | `_AutomaticManagementEnabled`, `_ManualManagementReason`, `_CreatedTime`, `_CategoryModificationTime` | Read-only / informational; ignored by the import. |
 
 - The CSV contains the **union** of every custom property across all accounts;
   an account that does not have a given property shows a blank cell for it.
-- A custom property whose name collides with a base column (rare) is prefixed
-  with `FC_` (e.g. `FC_Name`).
+- A custom property whose name collides with a top-level field (rare) is
+  prefixed with `FC_` (e.g. `FC_Name`).
 
 ---
 
 ## Step 2 — Edit the CSV
 
-Open the CSV in Excel / a text editor and edit only the custom property columns
-you intend to change (for example, fill in `Notes`).
+Open the CSV in Excel / a text editor and edit only the columns you intend to
+change — for example `Address` and/or `Notes`.
 
 - **Keep the `AccountID` column** — it is the authoritative key.
 - Leave a cell blank to make **no change** to that property (default behaviour).
@@ -168,11 +169,12 @@ Always preview with `-WhatIf` (or `-DryRun`) before a real run.
 ### Dry-run
 
 ```powershell
+# Update both the Address field and the Notes File Category in one run
 .\Import-CyberArkAccountPropertyUpdates.ps1 `
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
     -IdentityUserName 'me@corp.com' `
     -InputCsv .\accounts.csv `
-    -PropertiesToUpdate Notes,Environment `
+    -PropertiesToUpdate Address,Notes `
     -WhatIf
 ```
 
@@ -184,18 +186,24 @@ $oauth = Get-Credential   # OAuth client ID + secret (or use -IdentityUserName)
     -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
     -AuthType OAuth -Credential $oauth `
     -InputCsv .\accounts.csv `
-    -PropertiesToUpdate Notes,Environment `
+    -PropertiesToUpdate Address,Notes `
     -LogPath .\import.log
 ```
 
 Behaviour:
 
 - **`-PropertiesToUpdate`** lists exactly which columns/properties may change.
-  Everything else in the CSV is ignored.
-- For each property: a value that is **new** is added, a value that **differs**
-  from the current value is replaced, and an **unchanged** value is skipped.
-- **Blank cells** are left untouched by default. Use **`-RemoveEmptyValues`** to
-  remove a property when its cell is blank.
+  Everything else in the CSV is ignored. You can mix editable top-level fields
+  (`Address`, `Username`, `Name`) and custom File Categories (e.g. `Notes`) in
+  the same run.
+- **Top-level fields** (`Address`/`Username`/`Name`) are replaced when the value
+  differs; a blank cell is ignored (they are never cleared).
+- **Custom File Categories**: a **new** value is added, a value that **differs**
+  is replaced, an **unchanged** value is skipped. Blank cells are left untouched
+  by default; use **`-RemoveEmptyValues`** to remove a File Category when blank.
+- `AccountID`, `SafeName`, `PlatformID` and `SecretType` are keys/identity and
+  are never modified (listing one just logs a warning).
+- Each account is updated with a **single PATCH** containing all its changes.
 - Rows are independent: if one row fails, the script logs it and continues.
 - Use **`-ThrottleMs 200`** to pace requests if you hit rate limits (HTTP 429).
   The helper also retries 429/5xx/network errors with exponential back-off.
@@ -259,7 +267,8 @@ Import-only: `-InputCsv`, `-PropertiesToUpdate`, `-AccountIDColumn`,
 | Authenticate (classic) | `POST {PVWAUrl}/api/auth/{AuthType}/Logon` |
 | List accounts | `GET {PVWAUrl}/api/Accounts?limit=&offset=` (paginated) |
 | Account details | `GET {PVWAUrl}/api/Accounts/{id}` |
-| Update properties | `PATCH {PVWAUrl}/api/Accounts/{id}` with `[{op,path,value}]` against `/platformAccountProperties/*` |
+| Update top-level field | `PATCH {PVWAUrl}/api/Accounts/{id}` — e.g. `[{ "op":"replace", "path":"/address", "value":"..." }]` |
+| Update File Category | `PATCH {PVWAUrl}/api/Accounts/{id}` — e.g. `[{ "op":"replace", "path":"/platformAccountProperties/Notes", "value":"..." }]` |
 
 See the [CyberArk Privilege Cloud ISPSS REST API Cookbook](../.REST%20API%20Cookbooks/CyberArk%20Privilege%20Cloud%20ISPSS%20REST%20API%20Cookbook)
 in this repository for more API examples.

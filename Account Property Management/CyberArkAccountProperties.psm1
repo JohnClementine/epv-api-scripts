@@ -39,6 +39,17 @@ $script:CALogPath     = $null
 $script:CABaseColumns = @('AccountID', 'Name', 'Username', 'Address', 'SafeName', 'PlatformID', 'SecretType')
 $script:CAMetaColumns = @('_AutomaticManagementEnabled', '_ManualManagementReason', '_CreatedTime', '_CategoryModificationTime')
 
+# Top-level account fields the import is allowed to update, mapped to their
+# JSON-Patch path and the account property used to read the current value.
+$script:CAEditableBaseFields = [ordered]@{
+    'Address'  = @{ Path = '/address';  Property = 'address' }
+    'Username' = @{ Path = '/userName'; Property = 'userName' }
+    'Name'     = @{ Path = '/name';     Property = 'name' }
+}
+
+# Columns that are identity/keys and must never be updated by the import.
+$script:CAProtectedColumns = @('AccountID', 'SafeName', 'PlatformID', 'SecretType')
+
 function Get-CABaseColumns {
     <#.SYNOPSIS Returns the fixed base (identity/locator) column names.#>
     return $script:CABaseColumns
@@ -47,6 +58,32 @@ function Get-CABaseColumns {
 function Get-CAMetadataColumns {
     <#.SYNOPSIS Returns the read-only metadata column names (underscore-prefixed).#>
     return $script:CAMetaColumns
+}
+
+function Get-CAEditableBaseFieldMap {
+    <#.SYNOPSIS Returns the map of updatable top-level fields (column -> path/property).#>
+    return $script:CAEditableBaseFields
+}
+
+function Get-CAProtectedColumns {
+    <#.SYNOPSIS Returns column names that the import must never change.#>
+    return $script:CAProtectedColumns
+}
+
+function Get-CABaseFieldValue {
+    <#.SYNOPSIS Case-insensitively reads a top-level account field value (or $null).#>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Account,
+
+        [Parameter(Mandatory)]
+        [string]$Property
+    )
+    foreach ($prop in $Account.PSObject.Properties) {
+        if ($prop.Name -ieq $Property) { return $prop.Value }
+    }
+    return $null
 }
 
 # ---------------------------------------------------------------------------
@@ -877,17 +914,25 @@ function Get-CAAccountProperty {
 function Get-CAPropertyUpdateOperation {
     <#
     .SYNOPSIS
-        Computes the JSON-Patch operations needed to bring an account's custom
-        File Categories in line with the desired values.
+        Computes the JSON-Patch operations needed to bring an account's
+        properties in line with the desired values.
     .DESCRIPTION
-        For each desired property:
+        Each desired property is handled as either an editable top-level field
+        (Address -> /address, Username -> /userName, Name -> /name) or a custom
+        File Category (-> /platformAccountProperties/<Name>).
+
+        For custom File Categories:
           * absent on account + non-empty value -> 'add'
           * present + different value            -> 'replace'
           * present + same value                 -> no operation
           * empty value                          -> skipped, unless
             -RemoveEmptyValues, in which case an existing property is 'remove'd
-        Only /platformAccountProperties/* paths are produced - base fields,
-        secrets and secret management are never touched.
+
+        For top-level fields:
+          * different value -> 'replace'; same value -> no operation
+          * empty value     -> skipped (top-level fields are never cleared/removed)
+
+        Secrets and secret management are never touched.
     .OUTPUTS
         PSCustomObject with Operations (list) and ChangedFields (list of text).
     #>
@@ -902,13 +947,32 @@ function Get-CAPropertyUpdateOperation {
         [switch]$RemoveEmptyValues
     )
 
-    $operations = New-Object System.Collections.Generic.List[object]
-    $changed    = New-Object System.Collections.Generic.List[string]
+    $operations    = New-Object System.Collections.Generic.List[object]
+    $changed       = New-Object System.Collections.Generic.List[string]
+    $editableBase  = Get-CAEditableBaseFieldMap
 
     foreach ($name in $Updates.Keys) {
         $desired = $Updates[$name]
         if ($null -ne $desired) { $desired = ([string]$desired).Trim() }
+        $isEmpty = [string]::IsNullOrEmpty($desired)
 
+        # --- Editable top-level account field (e.g. Address -> /address) ---
+        $baseKey = $null
+        foreach ($key in $editableBase.Keys) {
+            if ($key -ieq $name) { $baseKey = $key; break }
+        }
+        if ($null -ne $baseKey) {
+            if ($isEmpty) { continue }   # never clear a top-level field implicitly
+            $map         = $editableBase[$baseKey]
+            $currentBase = ConvertTo-CAStringValue (Get-CABaseFieldValue -Account $Account -Property $map.Property)
+            if ($currentBase -ne $desired) {
+                $operations.Add([ordered]@{ op = 'replace'; path = $map.Path; value = $desired })
+                $changed.Add("{0}: '{1}' -> '{2}'" -f $baseKey, $currentBase, $desired)
+            }
+            continue
+        }
+
+        # --- Custom File Category (platformAccountProperties) ---
         $existing  = Get-CAAccountProperty -Account $Account -Name $name
         $exists    = ($null -ne $existing)
         $canonical = $name
@@ -917,8 +981,6 @@ function Get-CAPropertyUpdateOperation {
             $canonical = $existing.Name
             $current   = ConvertTo-CAStringValue $existing.Value
         }
-
-        $isEmpty = [string]::IsNullOrEmpty($desired)
 
         if ($isEmpty) {
             if ($RemoveEmptyValues -and $exists) {
@@ -966,6 +1028,9 @@ function ConvertTo-CAJsonArray {
 Export-ModuleMember -Function @(
     'Get-CABaseColumns',
     'Get-CAMetadataColumns',
+    'Get-CAEditableBaseFieldMap',
+    'Get-CAProtectedColumns',
+    'Get-CABaseFieldValue',
     'Initialize-CALog',
     'Write-CALog',
     'ConvertTo-CAStringValue',

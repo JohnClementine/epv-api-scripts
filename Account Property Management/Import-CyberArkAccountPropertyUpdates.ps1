@@ -9,16 +9,23 @@
     then for each row:
 
       1. Looks up the existing account by its CyberArk account ID
-         (the authoritative key - Name/Safe/etc. are informational only).
+         (the authoritative key - the account ID identifies the row, not Name/Safe).
       2. Compares the desired value of each property named in
          -PropertiesToUpdate against the current account value.
-      3. Issues a single PATCH containing only the changed File Categories
-         (add for new, replace for changed; remove when -RemoveEmptyValues
-         is set and the cell is blank).
+      3. Issues a single PATCH containing only the changed fields.
 
-    Only /platformAccountProperties/* paths are modified. The script never
-    changes the secret, never reads passwords, and never triggers password
-    management. Notes is handled as an ordinary custom File Category.
+    Updatable properties are:
+      * Editable top-level fields: Address (/address), Username (/userName),
+        Name (/name) - replaced when the value differs.
+      * Custom File Categories (platformAccountProperties), e.g. Notes - added
+        when new, replaced when changed, and removed when -RemoveEmptyValues is
+        set and the cell is blank.
+    Both kinds can be updated in the same run (e.g. -PropertiesToUpdate Address,Notes).
+
+    AccountID, SafeName, PlatformID and SecretType are treated as keys/identity
+    and are never modified. The script never changes the secret, never reads
+    passwords, and never triggers password management. Notes is handled as an
+    ordinary custom File Category.
 
     Supports -WhatIf / -DryRun, logs one result line per row, and continues
     processing when an individual row fails.
@@ -31,9 +38,10 @@
     -AccountIDColumn) and one column per property in -PropertiesToUpdate.
 
 .PARAMETER PropertiesToUpdate
-    Names of the custom File Categories / account properties to update,
-    e.g. -PropertiesToUpdate Notes,CustomField1. These must match CSV column
-    headers and are applied as platformAccountProperties.
+    Names of the properties to update, e.g. -PropertiesToUpdate Address,Notes.
+    Each must match a CSV column header. Address/Username/Name update the
+    matching top-level account field; any other name is applied as a custom
+    File Category (platformAccountProperties).
 
 .PARAMETER Credential
     Authentication credential (see Export script).
@@ -69,8 +77,10 @@
     back to 'id' if AccountID is not present).
 
 .PARAMETER RemoveEmptyValues
-    When set, a blank cell for a managed property removes that property from the
-    account. By default, blank cells are left untouched (no accidental clearing).
+    When set, a blank cell for a managed custom File Category removes that
+    property from the account. By default, blank cells are left untouched (no
+    accidental clearing). Top-level fields (Address/Username/Name) are never
+    cleared by a blank cell.
 
 .PARAMETER DryRun
     Preview changes without writing them. Equivalent to -WhatIf.
@@ -88,12 +98,12 @@
     Optional millisecond pause between rows (helps avoid rate limiting).
 
 .EXAMPLE
-    # Dry run - interactive Identity login (MFA handled by IdentityAuth.psm1)
+    # Dry run - update both Address and Notes in one run (interactive Identity login)
     .\Import-CyberArkAccountPropertyUpdates.ps1 `
         -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
         -IdentityUserName 'me@corp.com' `
         -InputCsv .\accounts-edited.csv `
-        -PropertiesToUpdate Notes,Environment `
+        -PropertiesToUpdate Address,Notes `
         -WhatIf
 
 .EXAMPLE
@@ -103,7 +113,7 @@
         -PVWAUrl 'https://mytenant.privilegecloud.cyberark.cloud/PasswordVault' `
         -AuthType OAuth -Credential $oauth `
         -InputCsv .\accounts-edited.csv `
-        -PropertiesToUpdate Notes,Environment `
+        -PropertiesToUpdate Address,Notes `
         -LogPath .\import.log
 #>
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Medium')]
@@ -215,22 +225,24 @@ try {
         }
     }
 
-    # Reject base/identity columns and read-only metadata - updates are limited
-    # to custom File Categories (platformAccountProperties).
-    $baseColumns     = Get-CABaseColumns
-    $protectedProps  = @($PropertiesToUpdate | Where-Object { ($baseColumns -contains $_) -or ($_ -like '_*') -or ($_ -ieq $AccountIDColumn) })
+    # Reject identity/key columns and read-only metadata. Updatable entries are
+    # the editable top-level fields (Address/Username/Name) plus any custom File
+    # Category (platformAccountProperties); the resolution happens per-property
+    # in Get-CAPropertyUpdateOperation.
+    $protectedColumns = Get-CAProtectedColumns
+    $protectedProps   = @($PropertiesToUpdate | Where-Object { ($protectedColumns -contains $_) -or ($_ -like '_*') -or ($_ -ieq $AccountIDColumn) })
     if ($protectedProps.Count -gt 0) {
-        Write-CALog -Type Warning -Message "These -PropertiesToUpdate entries are identity/metadata columns and will NOT be updated: $($protectedProps -join ', ')"
+        Write-CALog -Type Warning -Message "These -PropertiesToUpdate entries are identity/key/metadata columns and will NOT be updated: $($protectedProps -join ', ')"
     }
 
-    $candidateProps = @($PropertiesToUpdate | Where-Object { -not (($baseColumns -contains $_) -or ($_ -like '_*') -or ($_ -ieq $AccountIDColumn)) })
+    $candidateProps = @($PropertiesToUpdate | Where-Object { -not (($protectedColumns -contains $_) -or ($_ -like '_*') -or ($_ -ieq $AccountIDColumn)) })
     $missingProps   = @($candidateProps | Where-Object { $headers -notcontains $_ })
     $effectiveProps = @($candidateProps | Where-Object { $headers -contains $_ })
     if ($missingProps.Count -gt 0) {
         Write-CALog -Type Warning -Message "These -PropertiesToUpdate columns are not in the CSV and will be skipped: $($missingProps -join ', ')"
     }
     if ($effectiveProps.Count -eq 0) {
-        throw "None of the -PropertiesToUpdate columns are updatable custom properties present in the CSV. Nothing to update."
+        throw "None of the -PropertiesToUpdate columns are updatable properties present in the CSV. Nothing to update."
     }
     Write-CALog -Type Info -Message "Effective properties: $($effectiveProps -join ', ')"
 
