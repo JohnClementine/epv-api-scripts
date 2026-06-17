@@ -18,12 +18,16 @@ These scripts **only read account metadata**. They never retrieve passwords,
 never change passwords, and never trigger password-management actions. Updates
 are restricted to `/platformAccountProperties/*` (File Categories).
 
+> 👉 **New to PowerShell?** Start with [`QUICKSTART.md`](QUICKSTART.md) — a
+> copy‑paste, one‑page guide. This README is the fuller reference.
+
 ---
 
 ## Files
 
 | File | Purpose |
 |------|---------|
+| `QUICKSTART.md` | One-page, copy-paste guide for non-technical users. |
 | `Export-CyberArkAccountsToCsv.ps1` | Export all accounts + custom properties to CSV. |
 | `Import-CyberArkAccountPropertyUpdates.ps1` | Update selected custom properties on existing accounts from CSV. |
 | `CyberArkAccountProperties.psm1` | Shared helper module (auth, pagination, REST, flattening, JSON-Patch). |
