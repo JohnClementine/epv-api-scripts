@@ -27,6 +27,7 @@ are restricted to `/platformAccountProperties/*` (File Categories).
 
 | File | Purpose |
 |------|---------|
+| `CyberArk Account Field Updater - User Guide.docx` | Printable Word user guide for non-technical users. |
 | `QUICKSTART.md` | One-page, copy-paste guide for non-technical users. |
 | `Export-CyberArkAccountsToCsv.ps1` | Export all accounts + custom properties to CSV. |
 | `Import-CyberArkAccountPropertyUpdates.ps1` | Update selected custom properties on existing accounts from CSV. |
