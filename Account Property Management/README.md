@@ -133,6 +133,7 @@ $cred = Get-Credential   # vault username + password
 Useful options:
 
 - `-SafeName 'WindowsServers'` — export a single safe only.
+- `-PlatformID 'WinServerLocal'` — export only accounts on a given platform (handy for migrations).
 - `-Search 'admin'` — free-text filter.
 - `-FetchAccountDetails Always|Auto|Never` — `Auto` (default) fetches full
   per-account details only when the list payload does not already include the
@@ -144,10 +145,17 @@ Useful options:
 
 | Column group | Examples | Editable? |
 |--------------|----------|-----------|
-| **Editable top-level fields** | `Name`, `Username`, `Address` | **Yes** — list them in `-PropertiesToUpdate` to change them. |
-| **Keys / identity** | `AccountID`, `SafeName`, `PlatformID`, `SecretType` | Identify the account; **never changed** by the import. |
+| **Editable top-level fields** | `Name`, `Username`, `Address`, `PlatformID` | **Yes** — list them in `-PropertiesToUpdate` to change them. (`PlatformID` = platform migration; see note below.) |
+| **Keys / identity** | `AccountID`, `SafeName`, `SecretType` | Identify the account; **never changed** by the import. |
 | **Custom File Categories** | `Notes`, `Environment`, `Location`, `OwnerName`, `Port`, ... (one column per property) | **Yes** — edit these. |
 | **Metadata (underscore-prefixed)** | `_AutomaticManagementEnabled`, `_ManualManagementReason`, `_CreatedTime`, `_CategoryModificationTime` | Read-only / informational; ignored by the import. |
+
+> **Platform migration (`PlatformID`):** changing an account's platform is
+> consequential — it only works for compatible platforms, may require the new
+> platform's mandatory properties to be set in the same run, and does **not**
+> move the account to a different safe. Always `-WhatIf` and pilot a few
+> accounts first. To export just one platform's accounts, use
+> `-PlatformID <name>` on the export script.
 
 - The CSV contains the **union** of every custom property across all accounts;
   an account that does not have a given property shows a blank cell for it.

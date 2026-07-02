@@ -16,16 +16,21 @@
 
     Updatable properties are:
       * Editable top-level fields: Address (/address), Username (/userName),
-        Name (/name) - replaced when the value differs.
+        Name (/name), PlatformID (/platformId) - replaced when the value differs.
       * Custom File Categories (platformAccountProperties), e.g. Notes - added
         when new, replaced when changed, and removed when -RemoveEmptyValues is
         set and the cell is blank.
     Both kinds can be updated in the same run (e.g. -PropertiesToUpdate Address,Notes).
 
-    AccountID, SafeName, PlatformID and SecretType are treated as keys/identity
-    and are never modified. The script never changes the secret, never reads
-    passwords, and never triggers password management. Notes is handled as an
-    ordinary custom File Category.
+    NOTE on PlatformID: changing an account's platform is consequential. It only
+    succeeds for compatible platforms, may require the new platform's mandatory
+    properties to be set in the same run, and does NOT move the account to a
+    different safe. Always preview with -WhatIf and pilot on a few accounts first.
+
+    AccountID, SafeName and SecretType are treated as keys/identity and are never
+    modified. The script never changes the secret, never reads passwords, and
+    never triggers password management. Notes is handled as an ordinary custom
+    File Category.
 
     Supports -WhatIf / -DryRun, logs one result line per row, and continues
     processing when an individual row fails.
@@ -304,7 +309,13 @@ try {
             } else {
                 $changedText = ($plan.ChangedFields -join ' | ')
                 $target = "Account $accountId ($name in safe '$safe')"
-                $action = "Update File Categories: $changedText"
+                $action = "Update account fields: $changedText"
+
+                # Platform changes are consequential - make them stand out in the log.
+                $platformOp = @($plan.Operations | Where-Object { $_.path -eq '/platformId' })
+                if ($platformOp.Count -gt 0) {
+                    Write-CALog -Type Warning -Message "Row ${rowNum} [$accountId] $name ($safe): PLATFORM CHANGE -> '$($platformOp[0].value)'. Verify the account is manageable on the new platform afterwards."
+                }
 
                 # $WhatIfPreference is $true for both -WhatIf and -DryRun. Check it
                 # first so a dry-run can never issue a PATCH, regardless of how

@@ -68,6 +68,10 @@
 .PARAMETER Search
     Optional: free-text search filter passed to the API.
 
+.PARAMETER PlatformID
+    Optional: export only accounts currently on this platform (e.g. WinServerLocal).
+    Useful when planning a platform migration. Filtering is applied client-side.
+
 .PARAMETER PageSize
     Accounts per API page (1-1000, default 1000).
 
@@ -150,6 +154,10 @@ param(
     [string]$Search,
 
     [Parameter()]
+    [Alias('Platform')]
+    [string]$PlatformID,
+
+    [Parameter()]
     [ValidateRange(1, 1000)]
     [int]$PageSize = 1000,
 
@@ -211,6 +219,13 @@ try {
     Write-CALog -Type Info -Message "Retrieving account list..."
     $list = @(Get-CAAccountList -Session $session -SafeName $SafeName -Search $Search -PageSize $PageSize)
     Write-CALog -Type Success -Message "Total accounts retrieved: $($list.Count)"
+
+    # Optional client-side filter to a single source platform (handy for migrations)
+    if (-not [string]::IsNullOrEmpty($PlatformID)) {
+        $before = $list.Count
+        $list = @($list | Where-Object { [string]$_.platformId -ieq $PlatformID })
+        Write-CALog -Type Info -Message "Filtered to platform '$PlatformID': $($list.Count) of $before account(s)."
+    }
 
     if ($list.Count -eq 0) {
         Write-CALog -Type Warning -Message "No accounts found - nothing to export."

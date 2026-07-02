@@ -42,13 +42,14 @@ $script:CAMetaColumns = @('_AutomaticManagementEnabled', '_ManualManagementReaso
 # Top-level account fields the import is allowed to update, mapped to their
 # JSON-Patch path and the account property used to read the current value.
 $script:CAEditableBaseFields = [ordered]@{
-    'Address'  = @{ Path = '/address';  Property = 'address' }
-    'Username' = @{ Path = '/userName'; Property = 'userName' }
-    'Name'     = @{ Path = '/name';     Property = 'name' }
+    'Address'    = @{ Path = '/address';    Property = 'address' }
+    'Username'   = @{ Path = '/userName';   Property = 'userName' }
+    'Name'       = @{ Path = '/name';       Property = 'name' }
+    'PlatformID' = @{ Path = '/platformId'; Property = 'platformId' }
 }
 
 # Columns that are identity/keys and must never be updated by the import.
-$script:CAProtectedColumns = @('AccountID', 'SafeName', 'PlatformID', 'SecretType')
+$script:CAProtectedColumns = @('AccountID', 'SafeName', 'SecretType')
 
 function Get-CABaseColumns {
     <#.SYNOPSIS Returns the fixed base (identity/locator) column names.#>
